@@ -26,6 +26,7 @@ Ensure you have:
 
 ```bash
 pip install -r requirements.txt
+```
 ### 🤝 Collaborators
 @adevilde (Alice Devilder)
 @S-Amorotti (Sean Amorotti)
