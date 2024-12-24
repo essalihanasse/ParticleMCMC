@@ -1,0 +1,110 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Assuming SimulationSV, SimulationSVJR, SimulationSVJV, and SimulationSVJC are defined
+
+class MonteCarloExperiment:
+    def __init__(self, simulation_model, params, num_simulations, T, N):
+        """
+        Initialize the Monte Carlo experiment.
+
+        Parameters:
+        - simulation_model: Simulation class (e.g., SimulationSV, SimulationSVJR).
+        - params: Dictionary of model parameters.
+        - num_simulations: Number of Monte Carlo simulations.
+        - T: Total time horizon.
+        - N: Number of time steps.
+        """
+        self.simulation_model = simulation_model(**params)
+        self.num_simulations = num_simulations
+        self.T = T
+        self.N = N
+
+    def run_experiment(self, S0, V0, r, delta):
+        """
+        Run the Monte Carlo experiment.
+
+        Parameters:
+        - S0: Initial stock price.
+        - V0: Initial variance.
+        - r: Risk-free rate.
+        - delta: Dividend yield.
+
+        Returns:
+        - results: List of dictionaries containing paths and statistics.
+        """
+        results = []
+        for i in range(self.num_simulations):
+            S, V = self.simulation_model.SV_heston(S0, V0, r, delta, self.T, self.N)
+            results.append({
+                "S": S,
+                "V": V,
+                "mean_S": np.mean(S),
+                "std_S": np.std(S),
+                "mean_V": np.mean(V),
+                "std_V": np.std(V)
+            })
+        return results
+
+    def analyze_results(self, results):
+        """
+        Analyze the Monte Carlo results.
+
+        Parameters:
+        - results: List of results from run_experiment.
+
+        Returns:
+        - analysis: Dictionary with aggregated statistics.
+        """
+        mean_S = np.mean([res["mean_S"] for res in results])
+        std_S = np.std([res["mean_S"] for res in results])
+        mean_V = np.mean([res["mean_V"] for res in results])
+        std_V = np.std([res["mean_V"] for res in results])
+
+        return {
+            "mean_S": mean_S,
+            "std_S": std_S,
+            "mean_V": mean_V,
+            "std_V": std_V
+        }
+
+# Define model parameters
+params = {
+    "kappa": 2.0,
+    "theta": 0.04,
+    "sigma": 0.2,
+    "rho": -0.7,
+    "eta_s": 0.0,
+    "eta_v": 0.0
+}
+
+# Simulation settings
+num_simulations = 50
+T = 1.0  # 1 year
+N = 252  # Daily steps
+S0 = 100
+V0 = 0.04
+r = 0.03
+delta = 0.02
+
+# Run the Monte Carlo experiment
+monte_carlo = MonteCarloExperiment(SimulationSV, params, num_simulations, T, N)
+results = monte_carlo.run_experiment(S0, V0, r, delta)
+analysis = monte_carlo.analyze_results(results)
+
+# Display results
+print("Monte Carlo Analysis")
+print("Mean of stock price (S):", analysis["mean_S"])
+print("Std of stock price (S):", analysis["std_S"])
+print("Mean of variance (V):", analysis["mean_V"])
+print("Std of variance (V):", analysis["std_V"])
+
+# Plot a few paths
+plt.figure(figsize=(10, 6))
+for i, res in enumerate(results[:5]):
+    plt.plot(res["S"], label=f"Simulation {i+1}")
+plt.title("Monte Carlo Simulated Stock Price Paths")
+plt.xlabel("Time Steps")
+plt.ylabel("Stock Price")
+plt.legend()
+plt.show()
