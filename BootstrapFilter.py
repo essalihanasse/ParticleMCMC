@@ -1,5 +1,6 @@
 import numpy as np
 
+
 class BootstrapFilter():
     def __init__(self, num_particles):
         """
