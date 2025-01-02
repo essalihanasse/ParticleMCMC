@@ -1,71 +1,124 @@
 import numpy as np
+from concurrent.futures import ProcessPoolExecutor
+import multiprocessing
 
-class PMMH():
-    def __init__(self, num_iterations, proposal_std):
-        """
-        Initialize the PMMH algorithm.
-
-        Parameters:
-        - num_iterations: Number of PMMH iterations.
-        - proposal_std: Standard deviation for the Gaussian proposal distribution.
-        """
+class OptimizedPMMH:
+    def __init__(self, num_iterations=50, num_chains=5):
         self.num_iterations = num_iterations
-        self.proposal_std = proposal_std
+        self.num_chains = num_chains
+        self.num_workers = max(1, multiprocessing.cpu_count() - 1)
 
-    def run(self, observations, model, prior_mean, prior_std, filter_instance, initial_theta):
-        """
-        Run the PMMH algorithm to estimate theta.
+    def run(self, observations, particle_filter, initial_params, progress_callback=None):
+        param_names = list(initial_params.keys())
+        
+        # Run chains in parallel
+        with ProcessPoolExecutor(max_workers=self.num_workers) as executor:
+            futures = []
+            for _ in range(self.num_chains):
+                futures.append(
+                    executor.submit(
+                        self._run_single_chain,
+                        observations,
+                        particle_filter,
+                        initial_params.copy(),
+                        self.num_iterations
+                    )
+                )
+            
+            # Collect results
+            chains = []
+            acceptance_rates = []
+            for future in futures:
+                chain, acc_rate = future.result()
+                chains.append(chain)
+                acceptance_rates.append(acc_rate)
+                if progress_callback:
+                    progress_callback(1)
+        
+        return np.array(chains), np.array(acceptance_rates)
 
-        Parameters:
-        - observations: Observed data (e.g., simulated prices).
-        - model: Simulation model instance.
-        - prior_mean: Mean of the prior distribution for theta.
-        - prior_std: Standard deviation of the prior distribution for theta.
-        - filter_instance: An instance of the BootstrapFilter.
-        - initial_theta: Initial guess for theta.
+    @staticmethod
+    def _run_single_chain(observations, particle_filter, params, num_iterations):
+        """Run a single MCMC chain"""
+        chain = np.zeros((num_iterations, len(params)))
+        current_params = params.copy()
+        
+        # Rename lambda to lmda if present
+        if 'lambda' in current_params:
+            current_params['lmda'] = current_params.pop('lambda')
+        
+        # Initial likelihood
+        current_ll = particle_filter.compute_likelihood(observations, current_params)
+        accepted = 0
+        
+        for iter in range(num_iterations):
+            # Propose new parameters
+            proposed_params = OptimizedPMMH._propose_parameters(current_params)
+            
+            # Check constraints
+            if OptimizedPMMH._check_constraints(proposed_params):
+                # Compute likelihood
+                proposed_ll = particle_filter.compute_likelihood(
+                    observations, proposed_params
+                )
+                
+                # Accept/reject
+                log_alpha = proposed_ll - current_ll
+                if np.log(np.random.random()) < log_alpha:
+                    current_params = proposed_params.copy()
+                    current_ll = proposed_ll
+                    accepted += 1
+            
+            # Store current parameters
+            chain[iter] = list(current_params.values())
+        
+        acceptance_rate = accepted / num_iterations
+        return chain, acceptance_rate
 
-        Returns:
-        - theta_samples: Samples of theta from the posterior distribution.
-        """
-        current_theta = initial_theta
-        current_loglikelihood = self.log_likelihood(observations, model, filter_instance, current_theta)
+    @staticmethod
+    def _propose_parameters(current_params):
+        """Propose new parameters using adaptive scales"""
+        scales = {
+            'kappa': 0.2,
+            'theta': 0.005,
+            'sigma': 0.05,
+            'rho': 0.1,
+            'eta_s': 0.3,
+            'eta_v': 0.1,
+            'lmda': 0.1,
+            'mu_s': 0.01,
+            'sigma_s': 0.02,
+            'eta_js': 0.01,
+            'mu_v': 0.01,
+            'eta_jv': 0.01,
+            'rho_j': 0.1,
+            'sigma_c': 0.3,
+            'V0': 0.005,
+            'r': 0.001,
+            'delta': 0.001
+        }
+        
+        proposed = {}
+        for param, value in current_params.items():
+            scale = scales.get(param, 0.1)
+            proposed[param] = value + np.random.normal(0, scale)
+        
+        return proposed
 
-        theta_samples = [current_theta]
-
-        for _ in range(self.num_iterations):
-            proposed_theta = np.random.normal(current_theta, self.proposal_std)
-
-            # Evaluate log likelihood
-            proposed_loglikelihood = self.log_likelihood(observations, model, filter_instance, proposed_theta)
-
-            # Compute acceptance probability
-            prior_current = -0.5 * ((current_theta - prior_mean) ** 2) / (prior_std ** 2)
-            prior_proposed = -0.5 * ((proposed_theta - prior_mean) ** 2) / (prior_std ** 2)
-
-            acceptance_ratio = np.exp(proposed_loglikelihood + prior_proposed - current_loglikelihood - prior_current)
-
-            if np.random.uniform(0, 1) < acceptance_ratio:
-                current_theta = proposed_theta
-                current_loglikelihood = proposed_loglikelihood
-
-            theta_samples.append(current_theta)
-
-        return np.array(theta_samples)
-
-    def log_likelihood(self, observations, model, filter_instance, theta):
-        """
-        Compute the log likelihood of the data given the model.
-
-        Parameters:
-        - observations: Observed data (e.g., simulated prices).
-        - model: Simulation model instance.
-        - filter_instance: An instance of the BootstrapFilter.
-        - theta: Current value of theta.
-
-        Returns:
-        - log_likelihood: The log likelihood of the observations.
-        """
-        model.theta = theta
-        estimated_states = filter_instance.run_filter(observations, model, S0=100, V0=0.04, r=0.03, delta=0.02, T=1, N=len(observations)-1)
-        log_likelihood = -0.5 * np.sum((observations - estimated_states) ** 2)
-        return log_likelihood
+    @staticmethod
+    def _check_constraints(params):
+        """Check parameter constraints"""
+        constraints = [
+            params['kappa'] > 0,
+            params['theta'] > 0,
+            params['sigma'] > 0,
+            -1 < params['rho'] < 1,
+            params['lmda'] > 0,
+            params['sigma_s'] > 0,
+            params['sigma_c'] > 0,
+            -1 < params['rho_j'] < 1,
+            params.get('V0', 1e-4) > 0,
+            params.get('r', 0) >= 0,
+            params.get('delta', 0) >= 0
+        ]
+        return all(constraints)

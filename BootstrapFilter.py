@@ -58,3 +58,28 @@ class BootstrapFilter():
             estimated_states.append(np.mean(particles[:, t]))
 
         return np.array(estimated_states)
+class BootstrapFilter:
+    def __init__(self, num_particles):
+        self.num_particles = num_particles
+    
+    def run_filter(self, observations, model, S0, V0, r, delta, T, N):
+        # Enhanced initialization
+        particles = np.random.normal(V0, 0.1, self.num_particles)
+        weights = np.ones(self.num_particles) / self.num_particles
+        estimated_states = []
+        
+        for t in range(1, len(observations)):
+            # Propagate using model transitions
+            for i in range(self.num_particles):
+                particles[i] = model.propagate_state(particles[i], dt=T/N)
+            
+            # Compute weights using option prices
+            weights = self.compute_option_weights(particles, observations[t], model)
+            weights /= np.sum(weights)
+            
+            # Resample using systematic resampling
+            particles = self.systematic_resample(particles, weights)
+            
+            estimated_states.append(np.mean(particles))
+            
+        return np.array(estimated_states)
