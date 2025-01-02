@@ -39,42 +39,45 @@ class OptimizedPMMH:
 
     @staticmethod
     def _run_single_chain(observations, particle_filter, params, num_iterations):
-        """Run a single MCMC chain"""
+        """Run a single MCMC chain with adaptive proposals"""
         chain = np.zeros((num_iterations, len(params)))
         current_params = params.copy()
-        
-        # Rename lambda to lmda if present
-        if 'lambda' in current_params:
-            current_params['lmda'] = current_params.pop('lambda')
         
         # Initial likelihood
         current_ll = particle_filter.compute_likelihood(observations, current_params)
         accepted = 0
         
+        # Initialize adaptive covariance matrix
+        param_vec = list(current_params.values())
+        cov = np.diag(np.square(np.array(param_vec) * 0.01))  # Initial scaling
+        
         for iter in range(num_iterations):
-            # Propose new parameters
-            proposed_params = OptimizedPMMH._propose_parameters(current_params)
+            # Update proposal covariance using previous iterations
+            if iter > 0:
+                sample_cov = np.cov(chain[:iter].T)
+                if not np.any(np.isnan(sample_cov)):
+                    cov = 2.4**2 / len(param_vec) * sample_cov + 1e-6 * np.eye(len(param_vec))
             
-            # Check constraints
+            # Propose new parameters using multivariate normal
+            proposed_vec = np.random.multivariate_normal(list(current_params.values()), cov)
+            proposed_params = dict(zip(current_params.keys(), proposed_vec))
+            
+            # Check constraints and compute likelihood
             if OptimizedPMMH._check_constraints(proposed_params):
-                # Compute likelihood
-                proposed_ll = particle_filter.compute_likelihood(
-                    observations, proposed_params
-                )
+                proposed_ll = particle_filter.compute_likelihood(observations, proposed_params)
                 
                 # Accept/reject
                 log_alpha = proposed_ll - current_ll
                 if np.log(np.random.random()) < log_alpha:
-                    current_params = proposed_params.copy()
+                    current_params = proposed_params.copy() 
                     current_ll = proposed_ll
                     accepted += 1
-            
+                    
             # Store current parameters
             chain[iter] = list(current_params.values())
-        
+            
         acceptance_rate = accepted / num_iterations
         return chain, acceptance_rate
-
     @staticmethod
     def _propose_parameters(current_params):
         """Propose new parameters using adaptive scales"""
