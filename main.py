@@ -5,7 +5,15 @@ from PMMH import OptimizedPMMH
 from simulation import SimulationSVCJ
 import time
 import warnings
+import os
+from visualization.plotting import EnhancedModelPlotter
 warnings.filterwarnings("ignore")
+
+def create_output_directories():
+    """Create output directories if they don't exist"""
+    dirs = ['outputs', 'outputs/data', 'outputs/models', 'outputs/plots']
+    for dir_path in dirs:
+        os.makedirs(dir_path, exist_ok=True)
 
 def run_optimized_estimation():
     print("Starting optimized SVCJ model estimation...")
@@ -20,7 +28,7 @@ def run_optimized_estimation():
         sigma_c=3.10
     )
 
-    # Reduced simulation parameters
+    # Simulation parameters
     S0 = 100.0
     V0 = 0.04
     r = 0.03
@@ -37,7 +45,7 @@ def run_optimized_estimation():
     maturities = np.array([30, 60, 90, 180, 360])/360
     moneyness = np.array([0.9, 0.95, 1.0, 1.05, 1.1])
 
-    # Only generate options for specific dates
+    # Generate options for specific dates
     sample_dates = np.linspace(0, len(S)-1, 5, dtype=int)
     
     for t in range(len(S)):
@@ -58,8 +66,15 @@ def run_optimized_estimation():
 
     # Initialize pipeline components
     pipeline = EstimationPipeline(
-        particle_filter=ParticleFilter(num_particles=N),
-        pmmh=OptimizedPMMH(num_iterations=1000, num_chains=5, num_vertical=20, num_horizontal=1, use_orthogonal=True)
+        particle_filter=ParticleFilter(num_particles=1000),
+        pmmh=OptimizedPMMH(
+            num_iterations=1000,
+            num_chains=30,
+            num_vertical=20,
+            num_horizontal=1,
+            use_orthogonal=True,
+            burnin=100
+        )
     )
 
     # Initial parameters
@@ -94,7 +109,21 @@ def run_optimized_estimation():
         initial_params=initial_params
     )
 
-    # Print results with comparison
+    # Add additional data for plotting
+    results['market_prices'] = [opt['price'] for day_opts in option_data if day_opts for opt in day_opts]
+    results['model_prices'] = [model.compute_option_price(S[t], V[t], opt['K'], opt['tau'], r) 
+                              for t, day_opts in enumerate(option_data) if day_opts 
+                              for opt in day_opts]
+    results['moneyness'] = [opt['K']/S[t] for t, day_opts in enumerate(option_data) if day_opts 
+                           for opt in day_opts]
+    results['maturities'] = [opt['tau'] for day_opts in option_data if day_opts 
+                            for opt in day_opts]
+
+    # Calculate execution time
+    elapsed_time = time.time() - start_time
+    results['execution_time'] = elapsed_time
+
+    # Print parameter estimation results
     print("\nParameter Estimation Results:")
     print(f"{'Parameter':<10} {'True':<10} {'Estimated':<10} {'Error %':<10}")
     print("-" * 40)
@@ -118,10 +147,54 @@ def run_optimized_estimation():
         error_pct = abs(est_value - true_value) / true_value * 100
         print(f"{param:<10} {true_value:<10.4f} {est_value:<10.4f} {error_pct:<10.1f}")
 
-    elapsed_time = time.time() - start_time
     print(f"\nTotal execution time: {elapsed_time:.2f} seconds")
 
     return results
 
+def run_enhanced_analysis(results_dict):
+    """Run complete analysis with organized plots"""
+    plotter = EnhancedModelPlotter(base_output_dir='outputs/plots')
+    metrics = plotter.create_analysis_report(results_dict)
+    return metrics
+
+def save_results(results, filename='model_results.npz'):
+    """Save results to file"""
+    save_path = os.path.join('outputs/data', filename)
+    try:
+        np.savez_compressed(
+            save_path,
+            posterior_means=results['posterior_means'],
+            chains=results['chains'],
+            acceptance_rates=results['acceptance_rates'],
+            execution_time=results['execution_time']
+        )
+        print(f"\nResults saved to {save_path}")
+    except Exception as e:
+        print(f"Error saving results: {str(e)}")
+
+def main():
+    try:
+        # Create output directories
+        create_output_directories()
+        
+        # Run estimation
+        results = run_optimized_estimation()
+        
+        # Save results
+        save_results(results)
+        
+        # Run enhanced analysis with organized plotting
+        metrics = run_enhanced_analysis(results)
+        
+        print("\nAnalysis completed successfully.")
+        if metrics:
+            print("\nSummary Metrics:")
+            for key, value in metrics.items():
+                print(f"{key}: {value}")
+                
+    except Exception as e:
+        print(f"An error occurred during analysis: {str(e)}")
+        raise
+
 if __name__ == "__main__":
-    run_optimized_estimation()
+    main()
