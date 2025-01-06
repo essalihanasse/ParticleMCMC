@@ -9,32 +9,18 @@ class ParticleFilter:
         self.filtered_states = None
         self.filtered_std = None
         self.log_likelihood = None
+        self.state_history = None
         
     def initialize_particles(self, initial_state, noise_scale=0.1):
-        """Initialize particles with normal noise around initial state"""
         return np.random.normal(initial_state, noise_scale, self.num_particles)
 
     def compute_likelihood(self, observations, params):
-        """
-        Compute log-likelihood using particle filter with quantile-based approach
-        
-        Parameters:
-        -----------
-        observations : dict
-            Dictionary containing 'prices' and 'options'
-        params : dict
-            Model parameters
-        
-        Returns:
-        --------
-        float
-            Log-likelihood value
-        """
+        """Compute log-likelihood using particle filter"""
         prices = observations['prices']
         options = observations['options']
         dt = 1/252
         
-        # Convert parameter dictionary to arrays for Numba functions
+        # Convert parameters to arrays for Numba
         prop_params = np.array([
             params['kappa'], 
             params['theta'], 
@@ -49,19 +35,20 @@ class ParticleFilter:
             params['eta_s']
         ])
         
-        # Initialize particles
+        # Initialize particles and storage
         particles = self.initialize_particles(params['V0'])
         particles = np.maximum(particles, 1e-7)
         
-        # Initialize storage arrays
-        log_likelihood = 0.0
         n_timesteps = len(prices)
+        log_likelihood = 0.0
         filtered_states = np.zeros(n_timesteps)
         filtered_std = np.zeros(n_timesteps)
+        state_history = np.zeros((self.num_particles, n_timesteps))
         
         # Store initial state
         filtered_states[0] = np.mean(particles)
         filtered_std[0] = np.std(particles)
+        state_history[:, 0] = particles
         
         # Main filtering loop
         for t in range(1, n_timesteps):
@@ -86,14 +73,11 @@ class ParticleFilter:
             weights = np.maximum(weights, 1e-300)
             weights /= np.sum(weights)
             
-            # Update likelihood
+            # Update likelihood and store states
             log_likelihood += np.log(np.mean(weights))
-            
-            # Store filtered states
             filtered_states[t] = np.sum(weights * particles)
-            filtered_std[t] = np.sqrt(
-                np.sum(weights * (particles - filtered_states[t])**2)
-            )
+            filtered_std[t] = np.sqrt(np.sum(weights * (particles - filtered_states[t])**2))
+            state_history[:, t] = particles
             
             # Resample if needed
             ESS = 1 / np.sum(weights**2)
@@ -102,15 +86,16 @@ class ParticleFilter:
                 particles = particles[indices]
                 weights = np.ones(self.num_particles) / self.num_particles
         
-        # Store results as class attributes
+        # Store results
         self.filtered_states = filtered_states
         self.filtered_std = filtered_std
         self.log_likelihood = log_likelihood
+        self.state_history = state_history
         
         return log_likelihood
 
     def _propagate_particles(self, particles, param_array, dt):
-        """Propagate particles forward using transition dynamics"""
+        """Propagate particles forward"""
         kappa, theta, sigma, lmda, mu_v = param_array
         new_particles = np.empty_like(particles)
         
@@ -125,7 +110,7 @@ class ParticleFilter:
         return new_particles
 
     def _compute_return_weights(self, log_return, particles, param_array, dt):
-        """Compute weights based on return likelihood"""
+        """Compute weights from return likelihood"""
         r, delta, eta_s = param_array
         mean = (r - delta - particles/2 + eta_s * particles) * dt
         std = np.sqrt(np.maximum(particles * dt, 1e-7))
@@ -136,20 +121,16 @@ class ParticleFilter:
         """Compute option weights using quantile method"""
         weights = np.ones(self.num_particles)
         
-        # Get quantiles of variance distribution
         quantiles = np.quantile(particles, np.linspace(0, 1, self.num_quantiles))
         
         for option in options:
-            # Fit polynomial to prices at quantile points
             prices = []
             for v in quantiles:
                 prices.append(self._compute_option_price(v, option, params))
             coeffs = np.polyfit(quantiles, prices, 3)
             
-            # Compute prices for all particles
             model_prices = np.polyval(coeffs, particles)
             
-            # Update weights
             sigma_c = params['sigma_c']
             option_weights = np.exp(-0.5 * ((option['price'] - model_prices) / sigma_c)**2) / \
                            (sigma_c * np.sqrt(2 * np.pi))
@@ -174,7 +155,7 @@ class ParticleFilter:
         return indices
 
     def _compute_option_price(self, v, option, params):
-        """Compute option price using FFT method"""
+        """Compute option price using FFT"""
         # FFT parameters
         N = 512
         alpha = 1.5
@@ -185,7 +166,6 @@ class ParticleFilter:
         v_grid = np.arange(N) * eta
         k = -b + lambda_ * np.arange(N)
         
-        # Characteristic function computation
         u = v_grid - (alpha + 1)*1j
         kappa_Q = params['kappa'] - params['eta_v']
         theta_Q = params['kappa'] * params['theta'] / kappa_Q

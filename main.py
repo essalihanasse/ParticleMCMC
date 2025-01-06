@@ -66,10 +66,10 @@ def run_optimized_estimation():
 
     # Initialize pipeline components
     pipeline = EstimationPipeline(
-        particle_filter=ParticleFilter(num_particles=1000),
+        particle_filter=ParticleFilter(num_particles=500),
         pmmh=OptimizedPMMH(
-            num_iterations=1000,
-            num_chains=30,
+            num_iterations=500,
+            num_chains=20,
             num_vertical=20,
             num_horizontal=1,
             use_orthogonal=True,
@@ -104,7 +104,7 @@ def run_optimized_estimation():
         data={
             'prices': S,
             'options': option_data,
-            'true_states': V
+            'true_states': V # Volatility
         },
         initial_params=initial_params
     )

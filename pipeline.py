@@ -7,13 +7,13 @@ class EstimationPipeline:
         self.pmmh = pmmh
 
     def run(self, data, initial_params):
-        """Run the estimation pipeline"""
+        """Run the full estimation pipeline"""
         print("\nInitializing PMMH estimation...")
         print(f"Number of particles: {self.particle_filter.num_particles}")
         print(f"Number of PMMH iterations: {self.pmmh.num_iterations}")
         print(f"Number of parallel chains: {self.pmmh.num_chains}")
         
-        # Progress bar for PMMH iterations
+        # Store full chain history and diagnostics
         with tqdm(total=self.pmmh.num_iterations * self.pmmh.num_chains,
                  desc="PMMH Progress") as pbar:
             chains, acceptance_rates = self.pmmh.run(
@@ -23,28 +23,40 @@ class EstimationPipeline:
                 progress_callback=lambda x: pbar.update(1)
             )
 
-        # Compute statistics
-        print(f"\nMean acceptance rate: {np.mean(acceptance_rates):.2%}")
+        # Convert to numpy array and compute statistics
+        chains = np.array(chains)
+        burn_in = int(0.5 * chains.shape[1])  # 50% burn-in
         
         # Calculate posterior means
         posterior_means = {}
         param_names = list(initial_params.keys())
-        means = np.mean(chains, axis=(0,1))
+        chain_means = np.mean(chains[:, burn_in:, :], axis=(0, 1))
         
-        for name, value in zip(param_names, means):
+        for name, value in zip(param_names, chain_means):
             posterior_means[name] = value
 
         # Calculate convergence diagnostics
         r_hat = self._compute_gelman_rubin(chains)
+        print(f"\nMean acceptance rate: {np.mean(acceptance_rates):.2%}")
+        
         print("\nGelman-Rubin diagnostics (R̂):")
         for name, r in zip(param_names, r_hat):
             print(f"{name}: {r:.3f}")
+
+        # Store particle filter state history if available
+        state_history = getattr(self.particle_filter, 'state_history', None)
 
         return {
             'posterior_means': posterior_means,
             'chains': chains,
             'acceptance_rates': acceptance_rates,
-            'r_hat': dict(zip(param_names, r_hat))
+            'r_hat': dict(zip(param_names, r_hat)),
+            'burn_in': burn_in,
+            'state_history': state_history,
+            'convergence_metrics': {
+                'mean_acceptance': np.mean(acceptance_rates),
+                'r_hat_max': np.max(r_hat)
+            }
         }
 
     def _compute_gelman_rubin(self, chains):
