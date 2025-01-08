@@ -7,13 +7,14 @@ Welcome to the repository for **"Fast Filtering with Large Option Panels: Implic
 - 📊 **Dynamic Models**: Implementation of models like Heston's square root and Duffie-Pan-Singleton double-jump models.
 - 🔧 **Particle Filtering**: Optimized filtering using particle weights based on quantiles.
 - 📈 **Empirical Analysis**: Results derived from extensive datasets (S&P500 returns and options).
+- 🎛️ **Configurable Pipeline**: Command-line interface for customizing estimation parameters and time horizons.
 
 ## 🛠️ Built With
 
 - **NumPy** 🧮
 - **SciPy** 🔬
 - **Matplotlib** 📊
-- **Particles** 🎲
+- **argparse** 🎯
 
 ## 🚀 Getting Started
 
@@ -22,19 +23,76 @@ Welcome to the repository for **"Fast Filtering with Large Option Panels: Implic
 Ensure you have:
 
 - Python 3.9+
-- Required libraries (install using the command below).
+- Required libraries (install using the command below)
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## 🧑‍💻 Outline for project:
-  - Re-create the data for the project by  use the model parameter estimates of the paper and use the same moneyness-maturity grid when simulating the option prices. We will use a smaller dataset as it is time consuming to estimate the model over a large period of time and with 30 options per day.
-  - Implement a bootstrap filter for the model under consideration (by setting the parameters to reasonable values)
-  - Implement a PMMH-type algorithm to estimate the theta parameter; the article talks about an ‘adaptive’ version, where you gradually learn the covariance matrix of the proposal law (a Gaussian random walk); note that this is already implemented in particles, if you want to use it
-  - Compare the performance of this PMMH with the approach proposed in this article (orthogonal MCMC); you can also add SMC^2 to the comparison (again if you have time).
+### Command Line Usage
 
-### 🤝 Collaborators
-@adevilde (Alice Devilder)
-@S-Amorotti (Sean Amorotti)
-@essalihanasse (Anasse Essalih)
+The estimation pipeline can be customized through command line arguments. Here are some common usage patterns:
+
+1. Basic usage with default settings:
+```bash
+python main.py
+```
+
+2. Customize particle filter and MCMC parameters:
+```bash
+python main.py --num-particles 200 --mcmc-iterations 150 --num-chains 8
+```
+
+3. Adjust time horizon and granularity:
+```bash
+python main.py --time-horizon 0.15873 --time-steps 300
+```
+
+### Available Command Line Arguments
+
+- `--num-particles`: Number of particles for filtering (default: 100)
+- `--mcmc-iterations`: Number of MCMC iterations (default: 100)
+- `--num-chains`: Number of parallel MCMC chains (default: 5)
+- `--burnin`: Number of burn-in iterations (default: 10)
+- `--vertical-moves`: Number of vertical moves in PMMH (default: 10)
+- `--time-horizon`: Time horizon T in years (default: 20/252 ≈ 0.079365)
+- `--time-steps`: Number of time steps N (default: 252)
+
+## 🧑‍💻 Project Outline
+
+The project follows these key steps:
+
+1. **Data Recreation**: We simulate option prices using model parameter estimates from the paper, following the same moneyness-maturity grid. For computational efficiency, we use a reduced dataset size while maintaining the essential characteristics of the original study.
+
+2. **Bootstrap Filter Implementation**: A bootstrap filter is implemented for the model with carefully chosen parameter values. This forms the foundation for our particle filtering approach.
+
+3. **PMMH Algorithm**: We implement a Particle Marginal Metropolis-Hastings (PMMH) algorithm for parameter estimation, featuring:
+   - Adaptive covariance matrix learning for the proposal distribution
+   - Integration with the particles library for efficient sampling
+   - Comparison with orthogonal MCMC and SMC² approaches
+
+### Model Configuration
+
+The model parameters can be fine-tuned to match different market conditions:
+
+- Volatility parameters (κ, θ, σ, ρ)
+- Jump parameters (λ, μ_s, σ_s, μ_v)
+- Risk premiums (η_s, η_v, η_js, η_jv)
+
+## 🤝 Collaborators
+
+- @adevilde (Alice Devilder)
+- @S-Amorotti (Sean Amorotti)
+- @essalihanasse (Anasse Essalih)
+
+## 🔬 Advanced Usage
+
+For more sophisticated analysis, you can chain multiple parameters:
+
+```bash
+python main.py --num-particles 200 --mcmc-iterations 150 --num-chains 8 \
+               --burnin 20 --vertical-moves 15 --time-horizon 0.15873 \
+               --time-steps 300
+```
+
+This flexibility allows researchers to experiment with different configurations while maintaining the robust foundation of the original study.
