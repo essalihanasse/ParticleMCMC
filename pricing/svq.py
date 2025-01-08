@@ -34,24 +34,24 @@ class SVQMethod:
             
         return weights
 
-    def _compute_option_price(self, v, option_params, model):
-        """Compute single option price using FFT"""
-        # FFT parameters
-        alpha = 1.5 
-        N = 512
-        B = 500
-        dx = B/N
-        dk = 2*np.pi/(N*dx)
+    # def _compute_option_price(self, v, option_params, model):
+    #     """Compute single option price using FFT"""
+    #     # FFT parameters
+    #     alpha = 1.5 
+    #     N = 512
+    #     B = 500
+    #     dx = B/N
+    #     dk = 2*np.pi/(N*dx)
         
-        k = np.arange(N)*dk - B
-        x = np.arange(N)*dx
+    #     k = np.arange(N)*dk - B
+    #     x = np.arange(N)*dx
         
-        # Compute characteristic function
-        cf = self._compute_char_func(k - (alpha+1)*1j, v, option_params, model)
+    #     # Compute characteristic function
+    #     cf = self._compute_char_func(k - (alpha+1)*1j, v, option_params, model)
         
-        # Apply FFT
-        integrand = np.exp(-1j*k*np.log(option_params['K']))* \
-                   cf/(alpha**2 + alpha - k**2 + 1j*(2*alpha+1)*k)
+    #     # Apply FFT
+    #     integrand = np.exp(-1j*k*np.log(option_params['K']))* \
+    #                cf/(alpha**2 + alpha - k**2 + 1j*(2*alpha+1)*k)
                    
-        return np.real(np.exp(-alpha*np.log(option_params['K']))/np.pi * \
-               np.sum(integrand * np.exp(1j*k*x[0]) * dk))
+    #     return np.real(np.exp(-alpha*np.log(option_params['K']))/np.pi * \
+    #            np.sum(integrand * np.exp(1j*k*x[0]) * dk))

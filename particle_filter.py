@@ -15,84 +15,95 @@ class ParticleFilter:
         return np.random.normal(initial_state, noise_scale, self.num_particles)
 
     def compute_likelihood(self, observations, params):
-        """Compute log-likelihood using particle filter"""
-        prices = observations['prices']
-        options = observations['options']
-        dt = 1/252
-        
-        # Convert parameters to arrays for Numba
-        prop_params = np.array([
-            params['kappa'], 
-            params['theta'], 
-            params['sigma'], 
-            params['lmda'], 
-            params['mu_v']
-        ])
-        
-        ret_params = np.array([
-            params['r'], 
-            params['delta'], 
-            params['eta_s']
-        ])
-        
-        # Initialize particles and storage
-        particles = self.initialize_particles(params['V0'])
-        particles = np.maximum(particles, 1e-7)
-        
-        n_timesteps = len(prices)
-        log_likelihood = 0.0
-        filtered_states = np.zeros(n_timesteps)
-        filtered_std = np.zeros(n_timesteps)
-        state_history = np.zeros((self.num_particles, n_timesteps))
-        
-        # Store initial state
-        filtered_states[0] = np.mean(particles)
-        filtered_std[0] = np.std(particles)
-        state_history[:, 0] = particles
-        
-        # Main filtering loop
-        for t in range(1, n_timesteps):
-            # Compute log-return
-            log_return = np.log(prices[t] / prices[t-1])
+        """Compute log-likelihood using particle filter with error checking"""
+        try:
+            prices = observations['prices']
+            options = observations['options']
+            dt = 1/252
             
-            # Propagate particles
-            new_particles = self._propagate_particles(particles, prop_params, dt)
-            particles = new_particles
+            # Convert parameters to arrays for Numba
+            prop_params = np.array([
+                params['kappa'], 
+                params['theta'], 
+                params['sigma'], 
+                params['lmda'], 
+                params['mu_v']
+            ])
             
-            # Compute weights using returns
-            weights = self._compute_return_weights(log_return, particles, ret_params, dt)
+            ret_params = np.array([
+                params['r'], 
+                params['delta'], 
+                params['eta_s']
+            ])
             
-            # Add option weights if available
-            if len(options[t]) > 0:
-                option_weights = self._compute_option_weights_quantile(
-                    options[t], particles, params
-                )
-                weights *= option_weights
+            # Initialize particles with validation
+            particles = self.initialize_particles(params['V0'])
+            if particles is None or len(particles) == 0:
+                raise ValueError("Failed to initialize particles")
             
-            # Normalize weights
-            weights = np.maximum(weights, 1e-300)
-            weights /= np.sum(weights)
+            particles = np.maximum(particles, 1e-7)
             
-            # Update likelihood and store states
-            log_likelihood += np.log(np.mean(weights))
-            filtered_states[t] = np.sum(weights * particles)
-            filtered_std[t] = np.sqrt(np.sum(weights * (particles - filtered_states[t])**2))
-            state_history[:, t] = particles
+            n_timesteps = len(prices)
+            log_likelihood = 0.0
+            filtered_states = np.zeros(n_timesteps)
+            filtered_std = np.zeros(n_timesteps)
             
-            # Resample if needed
-            ESS = 1 / np.sum(weights**2)
-            if ESS < self.num_particles/2:
-                indices = self._systematic_resample(weights)
-                particles = particles[indices]
-                weights = np.ones(self.num_particles) / self.num_particles
-        
-        # Store results
-        self.filtered_states = filtered_states
-        self.filtered_std = filtered_std
-        self.log_likelihood = log_likelihood
-        self.state_history = state_history
-        
-        return log_likelihood
+            # Store initial state
+            filtered_states[0] = np.mean(particles)
+            filtered_std[0] = np.std(particles)
+            
+            # Main filtering loop with validation
+            for t in range(1, n_timesteps):
+                # Valid log-return check
+                log_return = np.log(prices[t] / prices[t-1])
+                if not np.isfinite(log_return):
+                    print(f"Warning: Invalid log return at time {t}")
+                    continue
+                
+                # Propagate particles
+                new_particles = self._propagate_particles(particles, prop_params, dt)
+                particles = new_particles
+                
+                # Compute weights
+                weights = self._compute_return_weights(log_return, particles, ret_params, dt)
+                
+                # Add option weights if available
+                if len(options[t]) > 0:
+                    option_weights = self._compute_option_weights_quantile(
+                        options[t], particles, params
+                    )
+                    weights *= option_weights
+                
+                # Normalize weights with validation
+                weights = np.maximum(weights, 1e-300)
+                sum_weights = np.sum(weights)
+                if sum_weights > 0:
+                    weights /= sum_weights
+                else:
+                    print(f"Warning: Zero sum of weights at time {t}")
+                    weights = np.ones_like(weights) / len(weights)
+                
+                # Update likelihood and store states
+                log_likelihood += np.log(np.mean(weights))
+                filtered_states[t] = np.sum(weights * particles)
+                filtered_std[t] = np.sqrt(np.sum(weights * (particles - filtered_states[t])**2))
+                
+                # Resample if needed
+                ESS = 1 / np.sum(weights**2)
+                if ESS < self.num_particles/2:
+                    indices = self._systematic_resample(weights)
+                    particles = particles[indices]
+            
+            # Validate final likelihood
+            if not np.isfinite(log_likelihood):
+                print("Warning: Invalid log likelihood")
+                return -np.inf
+                
+            return log_likelihood
+
+        except Exception as e:
+            print(f"Error in compute_likelihood: {str(e)}")
+            return -np.inf
 
     def _propagate_particles(self, particles, param_array, dt):
         """Propagate particles forward"""
