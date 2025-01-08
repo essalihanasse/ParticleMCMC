@@ -11,23 +11,35 @@ class ParticleFilter:
         self.log_likelihood = None
         self.state_history = None
         
-    def initialize_particles(self, initial_state, noise_scale=0.1):
-        return np.random.normal(initial_state, noise_scale, self.num_particles)
-
+    def initialize_particles(self, initial_state, data, params):
+        """Improved particle initialization using first few observations."""
+        # Use first few observations to estimate initial variance range
+        V0_est = self._estimate_initial_variance(data[:min(10, len(data))], params)
+        base_particles = np.random.normal(initial_state, V0_est * 0.1, self.num_particles)
+        return np.maximum(base_particles, 1e-7)
+    def _estimate_initial_variance(self, initial_data, params):
+        """Estimate initial variance using method of moments on returns."""
+        returns = np.diff(np.log(initial_data))
+        var_est = np.var(returns)
+        # Adjust for jump component if present
+        if 'lambda' in params:
+            var_est -= params['lambda'] * (params['mu_s']**2 + params['sigma_s']**2)
+        return max(var_est, 1e-5)
+    
     def compute_likelihood(self, observations, params):
-        """Compute log-likelihood using particle filter with error checking"""
+        """Compute log-likelihood with improved numerical stability."""
         try:
             prices = observations['prices']
             options = observations['options']
             dt = 1/252
             
-            # Convert parameters to arrays for Numba
+            # Convert parameters to arrays for efficiency
             prop_params = np.array([
                 params['kappa'], 
                 params['theta'], 
                 params['sigma'], 
-                params['lmda'], 
-                params['mu_v']
+                params['lmda'] if 'lmda' in params else 0, 
+                params['mu_v'] if 'mu_v' in params else 0
             ])
             
             ret_params = np.array([
@@ -37,11 +49,9 @@ class ParticleFilter:
             ])
             
             # Initialize particles with validation
-            particles = self.initialize_particles(params['V0'])
+            particles = self.initialize_particles(params['V0'], prices, params)
             if particles is None or len(particles) == 0:
                 raise ValueError("Failed to initialize particles")
-            
-            particles = np.maximum(particles, 1e-7)
             
             n_timesteps = len(prices)
             log_likelihood = 0.0
@@ -52,9 +62,9 @@ class ParticleFilter:
             filtered_states[0] = np.mean(particles)
             filtered_std[0] = np.std(particles)
             
-            # Main filtering loop with validation
+            # Main filtering loop with improved numerical stability
             for t in range(1, n_timesteps):
-                # Valid log-return check
+                # Compute log-return with validation
                 log_return = np.log(prices[t] / prices[t-1])
                 if not np.isfinite(log_return):
                     print(f"Warning: Invalid log return at time {t}")
@@ -64,41 +74,42 @@ class ParticleFilter:
                 new_particles = self._propagate_particles(particles, prop_params, dt)
                 particles = new_particles
                 
-                # Compute weights
-                weights = self._compute_return_weights(log_return, particles, ret_params, dt)
+                # Compute log weights
+                log_weights = self._compute_log_weights(log_return, particles, ret_params, dt)
                 
                 # Add option weights if available
                 if len(options[t]) > 0:
-                    option_weights = self._compute_option_weights_quantile(
+                    option_log_weights = self._compute_option_log_weights_quantile(
                         options[t], particles, params
                     )
-                    weights *= option_weights
+                    log_weights += option_log_weights
                 
-                # Normalize weights with validation
-                weights = np.maximum(weights, 1e-300)
+                # Normalize weights with improved stability
+                max_log_weight = np.max(log_weights)
+                weights = np.exp(log_weights - max_log_weight)
                 sum_weights = np.sum(weights)
+                
                 if sum_weights > 0:
                     weights /= sum_weights
+                    log_likelihood += max_log_weight + np.log(sum_weights) - np.log(self.num_particles)
                 else:
                     print(f"Warning: Zero sum of weights at time {t}")
                     weights = np.ones_like(weights) / len(weights)
                 
-                # Update likelihood and store states
-                log_likelihood += np.log(np.mean(weights))
+                # Update state estimates
                 filtered_states[t] = np.sum(weights * particles)
                 filtered_std[t] = np.sqrt(np.sum(weights * (particles - filtered_states[t])**2))
                 
-                # Resample if needed
+                # Systematic resampling when effective sample size is too low
                 ESS = 1 / np.sum(weights**2)
                 if ESS < self.num_particles/2:
                     indices = self._systematic_resample(weights)
                     particles = particles[indices]
             
-            # Validate final likelihood
-            if not np.isfinite(log_likelihood):
-                print("Warning: Invalid log likelihood")
-                return -np.inf
-                
+            self.filtered_states = filtered_states
+            self.filtered_std = filtered_std
+            self.log_likelihood = log_likelihood
+            
             return log_likelihood
 
         except Exception as e:
@@ -127,7 +138,13 @@ class ParticleFilter:
         std = np.sqrt(np.maximum(particles * dt, 1e-7))
         weights = np.exp(-0.5 * ((log_return - mean) / std)**2) / (std * np.sqrt(2 * np.pi))
         return weights
-
+    def _compute_log_weights(self, log_return, particles, param_array, dt):
+        """Compute weights in log space for numerical stability."""
+        r, delta, eta_s = param_array
+        mean = (r - delta - particles/2 + eta_s * particles) * dt
+        var = np.maximum(particles * dt, 1e-7)
+        log_weights = -0.5 * ((log_return - mean)**2 / var) - 0.5 * np.log(2 * np.pi * var)
+        return log_weights
     def _compute_option_weights_quantile(self, options, particles, params):
         """Compute option weights using quantile method"""
         weights = np.ones(self.num_particles)
@@ -150,19 +167,24 @@ class ParticleFilter:
         return weights
 
     def _systematic_resample(self, weights):
-        """Perform systematic resampling"""
+        """Improved systematic resampling implementation."""
         N = len(weights)
-        positions = (rd.random() + np.arange(N)) / N
-        indices = np.zeros(N, dtype=np.int64)
+        # Generate random starting point
+        u = np.random.uniform(0, 1/N)
+        # Generate equally spaced points
+        positions = (u + np.arange(N)) / N
+        # Generate cumulative sum
         cumsum = np.cumsum(weights)
-        cumsum[-1] = 1.0
+        cumsum[-1] = 1.0  # Avoid numerical errors
         
+        # Find indices
+        indices = np.zeros(N, dtype=np.int64)
         i = 0
         for j in range(N):
             while cumsum[i] < positions[j]:
                 i += 1
             indices[j] = i
-            
+        
         return indices
 
     def _compute_option_price(self, v, option, params):
@@ -209,3 +231,43 @@ class ParticleFilter:
             price = np.exp(-alpha * log_strike) / np.pi * fft_result[idx]
             return max(price, 0)
         return 0.0
+    # Add this method to your ParticleFilter class
+    def _compute_option_log_weights_quantile(self, options, particles, params):
+        """
+        Compute option weights using quantile method in log space for numerical stability.
+        
+        Args:
+            options (list): List of option dictionaries
+            particles (ndarray): Array of particle states
+            params (dict): Model parameters
+            
+        Returns:
+            ndarray: Log weights for each particle
+        """
+        log_weights = np.zeros(self.num_particles)
+        
+        # Compute quantiles of particles
+        quantiles = np.quantile(particles, np.linspace(0, 1, self.num_quantiles))
+        
+        for option in options:
+            # Calculate option prices for quantiles
+            quantile_prices = []
+            for v in quantiles:
+                price = self._compute_option_price(v, option, params)
+                quantile_prices.append(price)
+                
+            # Fit polynomial to quantile prices
+            coeffs = np.polyfit(quantiles, quantile_prices, 3)
+            
+            # Compute model prices for all particles
+            model_prices = np.polyval(coeffs, particles)
+            
+            # Compute log weights using normal likelihood
+            sigma_c = params['sigma_c']
+            particle_log_weights = (-0.5 * ((option['price'] - model_prices) / sigma_c)**2 
+                                - np.log(sigma_c) - 0.5 * np.log(2 * np.pi))
+            
+            # Add to total log weights
+            log_weights += particle_log_weights
+        
+        return log_weights
