@@ -21,15 +21,18 @@ class OptimizedPMMH:
             return self._run_adaptive(observations, particle_filter, initial_params, progress_callback)
 
     def _run_orthogonal(self, observations, particle_filter, initial_params, progress_callback=None):
-        """Run orthogonal MCMC with horizontal and vertical moves"""
-        # Initialize chains
-        chains = []
+        # Initialize chains storage with proper dimensions
+        # First get the number of parameters
+        n_params = len(initial_params)
+        # Pre-allocate the chains array with proper shape: (num_chains, num_iterations, num_params)
+        chains = np.zeros((self.num_chains, self.num_iterations, n_params))
+        param_names = list(initial_params.keys())  # Keep track of parameter order
+        
         current_params = []
         current_lls = []
         
         # Initialize each chain
-        for _ in range(self.num_chains):
-            chains.append([])
+        for i in range(self.num_chains):
             current_params.append(initial_params.copy())
             current_lls.append(particle_filter.compute_likelihood(observations, initial_params))
             
@@ -57,13 +60,17 @@ class OptimizedPMMH:
                         new_params, new_ll, was_accepted = future.result()
                         current_params[chain] = new_params
                         current_lls[chain] = new_ll
-                        chains[chain].append(list(new_params.values()))
+                        
+                        # Store parameters in pre-allocated array
+                        for j, param_name in enumerate(param_names):
+                            chains[chain, iter, j] = new_params[param_name]
+                        
                         accepted[chain] += was_accepted
                         
                         if progress_callback:
                             progress_callback(1)
                 
-                # Horizontal moves (state exchange between chains)
+                # Horizontal moves
                 if iter % (self.num_vertical * self.num_horizontal) == 0:
                     for i in range(self.num_chains - 1):
                         log_ratio = current_lls[i+1] - current_lls[i]
@@ -74,12 +81,9 @@ class OptimizedPMMH:
                             current_lls[i], current_lls[i+1] = \
                                 current_lls[i+1], current_lls[i]
         
-        # Calculate acceptance rates
         acceptance_rates = accepted / self.num_iterations
-        chains = np.array([np.array(chain) for chain in chains])
-            
+        
         return chains, acceptance_rates
-
     def _vertical_move(self, observations, particle_filter, current_params, current_ll, iter):
         """Execute single vertical MCMC move"""
         # Propose parameters
@@ -88,15 +92,19 @@ class OptimizedPMMH:
         if not self._check_constraints(proposed_params):
             return current_params, current_ll, False
         
-        proposed_ll = particle_filter.compute_likelihood(observations, proposed_params)
+        # Compute likelihood with proper error handling
+        try:
+            proposed_ll = particle_filter.compute_likelihood(observations, proposed_params)
+        except Exception as e:
+            print(f"Error computing likelihood: {str(e)}")
+            return current_params, current_ll, False
         
         # Accept/reject
-        log_alpha = float(proposed_ll - current_ll)  # Ensure float type
-        if np.log(np.random.random()) < log_alpha:
+        log_alpha = float(proposed_ll - current_ll)
+        if np.isfinite(log_alpha) and np.log(np.random.random()) < log_alpha:
             return proposed_params, proposed_ll, True
             
         return current_params, current_ll, False
-
     def _propose_parameters(self, current_params, iter=0):
         """Propose new parameters using adaptive scales"""
         base_scales = {
@@ -167,3 +175,50 @@ class OptimizedPMMH:
             params.get('eta_jv', 0.01) > 1e-7
         ]
         return all(constraints)
+    def _run_adaptive(self, observations, particle_filter, initial_params, progress_callback=None):
+        """Run adaptive MCMC sampling"""
+        n_params = len(initial_params)
+        chains = np.zeros((self.num_chains, self.num_iterations, n_params))
+        param_names = list(initial_params.keys())
+        
+        # Initialize covariance matrix for adaptive proposals
+        proposal_cov = np.eye(n_params) * 0.01
+        
+        current_params = initial_params.copy()
+        current_ll = particle_filter.compute_likelihood(observations, current_params)
+        
+        accepted = 0
+        
+        for iter in range(self.num_iterations):
+            # Update proposal covariance after burn-in
+            if iter > self.burnin and iter % 50 == 0:
+                proposal_cov = np.cov(chains[0, max(0, iter-500):iter].T)
+                proposal_cov += 1e-6 * np.eye(n_params)  # Add small diagonal term for stability
+                
+            # Propose new parameters using multivariate normal
+            proposed_params = self._propose_parameters_adaptive(current_params, proposal_cov)
+            
+            if not self._check_constraints(proposed_params):
+                continue
+                
+            try:
+                proposed_ll = particle_filter.compute_likelihood(observations, proposed_params)
+            except Exception as e:
+                raise RuntimeError(f"Likelihood computation failed: {str(e)}")
+                
+            # Accept/reject
+            log_alpha = float(proposed_ll - current_ll)
+            if np.isfinite(log_alpha) and np.log(np.random.random()) < log_alpha:
+                current_params = proposed_params
+                current_ll = proposed_ll
+                accepted += 1
+                
+            # Store current state
+            for j, param_name in enumerate(param_names):
+                chains[0, iter, j] = current_params[param_name]
+                
+            if progress_callback:
+                progress_callback(1)
+                
+        acceptance_rate = accepted / self.num_iterations
+        return chains, np.array([acceptance_rate])
