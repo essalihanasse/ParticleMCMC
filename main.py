@@ -10,51 +10,62 @@ import time
 import warnings
 import os
 from tabulate import tabulate
+
 def create_output_directories():
     """Create output directories if they don't exist"""
-    dirs = ['outputs','outputs/plots']
+    dirs = ['outputs', 'outputs/plots', 'outputs/diagnostics']
     for dir_path in dirs:
         os.makedirs(dir_path, exist_ok=True)
 
 def display_parameter_table(true_params, estimated_params, std_errors=None):
-    """Display parameter estimation results in a nicely formatted table"""
-    headers = ["Parameter", "True Value", "Estimate", "Std Error", "Error %"]
+    """Display parameter estimation results with enhanced formatting"""
+    headers = ["Parameter", "True Value", "Estimate", "Std Error", "Error %", "95% CI"]
     rows = []
     for param, true_val in true_params.items():
         if param in estimated_params:
             est_val = estimated_params[param]
             std_err = std_errors.get(param, "N/A") if std_errors else "N/A"
             error_pct = abs(est_val - true_val) / true_val * 100 if true_val != 0 else 0
-            rows.append([param, f"{true_val:.4f}", f"{est_val:.4f}", f"{std_err}", f"{error_pct:.1f}%"])
+            
+            # Calculate 95% confidence interval
+            if std_err != "N/A":
+                ci_lower = est_val - 1.96 * std_err
+                ci_upper = est_val + 1.96 * std_err
+                ci = f"({ci_lower:.4f}, {ci_upper:.4f})"
+            else:
+                ci = "N/A"
+                
+            rows.append([
+                param, 
+                f"{true_val:.4f}", 
+                f"{est_val:.4f}", 
+                f"{std_err}", 
+                f"{error_pct:.1f}%",
+                ci
+            ])
     
     print("\nParameter Estimation Results:")
-    print(tabulate(rows, headers=headers, tablefmt="grid"))
+    print(tabulate(rows, headers=headers, tablefmt="grid", floatfmt=".4f"))
 
 def display_diagnostics(diagnostics):
-    """Display model diagnostics in a structured format"""
+    """Display enhanced model diagnostics"""
     print("\nModel Diagnostics:")
     print("-" * 50)
     
     # Convergence diagnostics
     if 'r_hat' in diagnostics:
-        print("\nConvergence Diagnostics:")
+        print("\nGelman-Rubin Convergence Diagnostics (R̂):")
         r_hat_values = diagnostics['r_hat']
         param_names = ['kappa', 'theta', 'sigma', 'rho', 'eta_s', 'eta_v', 'lmda', 
                       'mu_s', 'sigma_s', 'eta_js', 'mu_v', 'eta_jv', 'rho_j', 
                       'sigma_c', 'r', 'delta', 'V0']
-                      
-        # Create table format for R-hat values
-        headers = ["Parameter", "R-hat"]
+        
+        headers = ["Parameter", "R-hat", "Status"]
         rows = []
         
-        # Handle case where r_hat is numpy array
-        if isinstance(r_hat_values, np.ndarray):
-            for param, r_hat in zip(param_names, r_hat_values):
-                rows.append([param, f"{r_hat:.3f}"])
-        else:
-            # Handle case where r_hat is dictionary
-            for param, r_hat in r_hat_values.items():
-                rows.append([param, f"{r_hat:.3f}"])
+        for param, r_hat in zip(param_names, r_hat_values):
+            status = "✓ Converged" if r_hat < 1.1 else "⚠ Not converged"
+            rows.append([param, f"{r_hat:.3f}", status])
                 
         print(tabulate(rows, headers=headers, tablefmt="grid"))
     
@@ -62,31 +73,37 @@ def display_diagnostics(diagnostics):
     if 'rmse' in diagnostics:
         print("\nOption Pricing Errors:")
         print(f"Overall RMSE: {diagnostics['rmse']:.4f}")
+        
         if 'rmse_by_moneyness' in diagnostics:
             print("\nRMSE by Moneyness:")
-            headers = ["Moneyness", "RMSE"]
+            headers = ["Moneyness", "RMSE", "Sample Size"]
             rows = []
             moneyness_bins = ['0.8-0.9', '0.9-1.0', '1.0-1.1', '1.1-1.2']
-            for bin_name, rmse in zip(moneyness_bins, diagnostics['rmse_by_moneyness']):
-                rows.append([bin_name, f"{rmse:.4f}"])
+            for bin_name, rmse, size in zip(moneyness_bins, 
+                                          diagnostics['rmse_by_moneyness'],
+                                          diagnostics['sample_sizes']):
+                rows.append([bin_name, f"{rmse:.4f}", size])
             print(tabulate(rows, headers=headers, tablefmt="grid"))
 
-    # Acceptance rates
+    # MCMC diagnostics
     if 'acceptance_rates' in diagnostics:
-        print("\nMCMC Acceptance Rates:")
+        print("\nMCMC Diagnostics:")
         print(f"Mean acceptance rate: {diagnostics['acceptance_rates']:.2%}")
+        if 'effective_sample_size' in diagnostics:
+            print(f"Effective sample size: {diagnostics['effective_sample_size']:.0f}")
+
 def parse_arguments():
-    """Parse command line arguments for model configuration."""
+    """Parse command line arguments with improved defaults"""
     parser = argparse.ArgumentParser(description='Run SVCJ model estimation with custom parameters')
     
-    # Pipeline configuration arguments
-    parser.add_argument('--num-particles', type=int, default=100,
+    # Pipeline configuration
+    parser.add_argument('--num-particles', type=int, default=1000,
                        help='Number of particles for the particle filter')
-    parser.add_argument('--mcmc-iterations', type=int, default=100,
+    parser.add_argument('--mcmc-iterations', type=int, default=500,
                        help='Number of MCMC iterations')
     parser.add_argument('--num-chains', type=int, default=5,
                        help='Number of parallel MCMC chains')
-    parser.add_argument('--burnin', type=int, default=10,
+    parser.add_argument('--burnin', type=int, default=100,
                        help='Number of burn-in iterations')
     parser.add_argument('--vertical-moves', type=int, default=10,
                        help='Number of vertical moves in PMMH')
@@ -97,20 +114,30 @@ def parse_arguments():
     parser.add_argument('--time-steps', type=int, default=252,
                        help='Number of time steps N')
     
+    # Additional parameters
+    parser.add_argument('--seed', type=int, default=42,
+                       help='Random seed for reproducibility')
+    parser.add_argument('--debug', action='store_true',
+                       help='Enable debug mode with additional logging')
+    
     return parser.parse_args()
 
 def main():
-    """Main function with configurable pipeline parameters and time horizon."""
+    """Enhanced main function with improved error handling and diagnostics"""
     try:
-        # Parse command line arguments
+        # Set random seed for reproducibility
         args = parse_arguments()
+        np.random.seed(args.seed)
         
         # Create output directories
         create_output_directories()
         
-        # Initialize pipeline components with command line arguments
+        # Initialize pipeline components
         pipeline = EstimationPipeline(
-            particle_filter=ParticleFilter(num_particles=args.num_particles),
+            particle_filter=ParticleFilter(
+                num_particles=args.num_particles,
+                num_quantiles=24  # Increased from 12
+            ),
             pmmh=OptimizedPMMH(
                 num_iterations=args.mcmc_iterations,
                 num_chains=args.num_chains,
@@ -121,7 +148,7 @@ def main():
             )
         )
         
-        # Initialize model with annual parameters (same as before)
+        # Initialize model with annual parameters
         model = SimulationSVCJ(
             kappa=0.96,
             theta=0.03,
@@ -139,7 +166,7 @@ def main():
             sigma_c=3.10
         )
 
-        # Simulation parameters with configurable time horizon
+        # Simulation parameters
         S0, V0 = 100.0, 0.04
         r, delta = 0.03, 0.02
         T, N = args.time_horizon, args.time_steps
@@ -151,14 +178,15 @@ def main():
         print(f"MCMC iterations: {args.mcmc_iterations}")
         print(f"Number of chains: {args.num_chains}")
         
+        # Simulate price paths
         print("\nSimulating price paths...")
         S, V = model.simulate_paths(S0, V0, r, delta, T, N)
 
-        # Generate synthetic options
+        # Generate synthetic options with improved coverage
         print("Generating option data...")
         option_data = []
         maturities = np.array([30, 60, 90, 180, 360])/360
-        moneyness = np.array([0.9, 0.95, 1.0, 1.05, 1.1])
+        moneyness = np.array([0.85, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15])
         
         for t in range(len(S)):
             daily_options = []
@@ -173,7 +201,7 @@ def main():
                     })
             option_data.append(daily_options)
 
-        # Initial parameters (same as before)
+        # Initial parameters with reasonable bounds
         initial_params = {
             'kappa': 1.0, 'theta': 0.03, 'sigma': 0.4, 'rho': -0.7,
             'eta_s': 2.0, 'eta_v': 0.5, 'lmda': 0.5, 'mu_s': 0.0,
@@ -181,32 +209,33 @@ def main():
             'rho_j': -0.5, 'sigma_c': 3.0, 'r': r, 'delta': delta, 'V0': V0
         }
 
-        # Run estimation with configured pipeline
+        # Run estimation with progress tracking
         print("\nRunning MCMC estimation...")
+        start_time = time.time()
         results = pipeline.run(
             data={'prices': S, 'options': option_data, 'true_states': V},
             initial_params=initial_params
         )
+        estimation_time = time.time() - start_time
+        print(f"\nEstimation completed in {estimation_time:.2f} seconds")
 
-        # Add necessary information for plotting
+        # Add necessary information for analysis
         results.update({
             'param_names': list(initial_params.keys()),
             'true_params': {k: v for k, v in model.__dict__.items() if k in initial_params},
             'moneyness': moneyness,
-            'maturity': maturities
+            'maturity': maturities,
+            'estimation_time': estimation_time
         })
 
         # Initialize diagnostics and plotting
         diagnostics = ModelDiagnostics()
         plotter = ModelPlotter()
 
-        # Compute diagnostics
-        diag_results = {
-            'r_hat': diagnostics.analyze_convergence(results['chains']),
-            'acceptance_rates': np.mean(results.get('acceptance_rates', [])),
-        }
+        # Compute comprehensive diagnostics
+        diag_results = diagnostics.compute_all_diagnostics(results)
 
-        # Display results
+        # Display results and diagnostics
         display_parameter_table(model.__dict__, results['posterior_means'], 
                               results.get('posterior_std'))
         display_diagnostics(diag_results)
@@ -219,6 +248,10 @@ def main():
 
     except Exception as e:
         print(f"\nAn error occurred during analysis: {str(e)}")
+        if args.debug:
+            import traceback
+            print("\nFull traceback:")
+            traceback.print_exc()
         raise
 
 if __name__ == "__main__":
