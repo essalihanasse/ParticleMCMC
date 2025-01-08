@@ -105,7 +105,7 @@ class OptimizedPMMH:
                         
                         # Store parameters
                         for j, param_name in enumerate(param_names):
-                            chains[chain, iter, j] = new_params[param_name]
+                            chains[chain, iter, j] = new_params[param_name] * 10  # Apply scaling factor here
                         
                         accepted[chain] += was_accepted
                         
@@ -175,7 +175,7 @@ class OptimizedPMMH:
                 
                 # Store current state
                 for j, param_name in enumerate(param_names):
-                    chains[0, iter, j] = current_params[param_name]
+                    chains[0, iter, j] = current_params[param_name] * 10  # Apply scaling factor here
                 
                 if progress_callback:
                     progress_callback(1)

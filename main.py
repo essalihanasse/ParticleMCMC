@@ -19,6 +19,7 @@ def create_output_directories():
 
 def display_parameter_table(true_params, estimated_params, std_errors=None):
     """Display parameter estimation results with enhanced formatting"""
+
     headers = ["Parameter", "True Value", "Estimate", "Std Error", "Error %", "95% CI"]
     rows = []
     for param, true_val in true_params.items():
@@ -26,7 +27,7 @@ def display_parameter_table(true_params, estimated_params, std_errors=None):
             est_val = estimated_params[param]
             std_err = std_errors.get(param, "N/A") if std_errors else "N/A"
             error_pct = abs(est_val - true_val) / true_val * 100 if true_val != 0 else 0
-            
+
             # Calculate 95% confidence interval
             if std_err != "N/A":
                 ci_lower = est_val - 1.96 * std_err
@@ -34,7 +35,7 @@ def display_parameter_table(true_params, estimated_params, std_errors=None):
                 ci = f"({ci_lower:.4f}, {ci_upper:.4f})"
             else:
                 ci = "N/A"
-                
+
             rows.append([
                 param, 
                 f"{true_val:.4f}", 
@@ -43,9 +44,10 @@ def display_parameter_table(true_params, estimated_params, std_errors=None):
                 f"{error_pct:.1f}%",
                 ci
             ])
-    
+
     print("\nParameter Estimation Results:")
     print(tabulate(rows, headers=headers, tablefmt="grid", floatfmt=".4f"))
+
 
 def display_diagnostics(diagnostics):
     """Display enhanced model diagnostics"""
