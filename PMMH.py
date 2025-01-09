@@ -105,7 +105,7 @@ class OptimizedPMMH:
                         
                         # Store parameters
                         for j, param_name in enumerate(param_names):
-                            chains[chain, iter, j] = new_params[param_name] * 10  # Apply scaling factor here
+                            chains[chain, iter, j] = new_params[param_name] # Apply scaling factor here
                         
                         accepted[chain] += was_accepted
                         
@@ -175,7 +175,7 @@ class OptimizedPMMH:
                 
                 # Store current state
                 for j, param_name in enumerate(param_names):
-                    chains[0, iter, j] = current_params[param_name] * 10  # Apply scaling factor here
+                    chains[0, iter, j] = current_params[param_name] * 10   # Apply scaling factor here
                 
                 if progress_callback:
                     progress_callback(1)
@@ -260,7 +260,7 @@ class OptimizedPMMH:
         proposed = {}
         
         # Adjust scales based on iteration to improve early exploration
-        scale_factor = 1.0
+        scale_factor = 0.1
         if iter < self.burnin:
             scale_factor = max(0.1, min(1.0, iter / self.burnin))
         
@@ -354,7 +354,7 @@ class OptimizedPMMH:
                 params.get('eta_jv', 0.01) > 0,
                 
                 # Feller condition
-                2 * params['kappa'] * params['theta'] > params['sigma']**2
+                # 2 * params['kappa'] * params['theta'] > params['sigma']**2
             ]
             return all(constraints)
             
@@ -376,6 +376,7 @@ class OptimizedPMMH:
             )
             
             if not self._check_constraints(proposed_params):
+                print("Constraints not met")
                 return current_params, current_ll, False
             
             # Compute likelihood
